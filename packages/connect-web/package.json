@@ -21,6 +21,9 @@
     "conformance:node:promise": "connectconformance --mode client --conf conformance/conformance-web-node.yaml -- tsx conformance/client.ts --browser node",
     "conformance:node:callback": "connectconformance --mode client --conf conformance/conformance-web-node.yaml -- tsx conformance/client.ts --browser node --useCallbackClient",
     "test": "tsc --noEmit && node --import tsx --test $(find src -name '*.spec.ts')",
+    "test:browser": "tsc --noEmit && node --import tsx --test --test-force-exit browsertest/websocket.spec.ts",
+    "test:browser:go": "tsc --noEmit && node --import tsx --test --test-force-exit browsertest/go-interop.spec.ts",
+    "test:browser:all": "CONNECT_BROWSERS=chrome,firefox,safari npm run test:browser",
     "format": "biome format --write",
     "license-header": "license-header",
     "lint": "biome lint --error-on-warnings",
@@ -36,7 +39,9 @@
     }
   },
   "devDependencies": {
+    "@bufbuild/buf": "^1.72.0",
     "@connectrpc/connect-conformance": "^2.2.0",
+    "@connectrpc/connect-node": "^2.2.0",
     "tsx": "^4.20.6",
     "webdriverio": "^9.31.4"
   },

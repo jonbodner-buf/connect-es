@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "start": "tsx src/server.ts",
+    "start:websocket": "tsx src/websocket-server.ts",
     "client": "tsx src/client.ts",
     "generate": "buf generate",
     "format": "biome format --write",

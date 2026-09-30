@@ -30,6 +30,14 @@ import type {
   NodeServerResponse,
 } from "./node-universal-handler.js";
 import { compressionBrotli, compressionGzip } from "./compression.js";
+import {
+  createNodeUpgradeHandler,
+  isUnderWebSocketPrefix,
+} from "./node-websocket-upgrade.js";
+import type {
+  NodeUpgradeHandlerFn,
+  NodeWebSocketOptions,
+} from "./node-websocket-upgrade.js";
 
 export interface ConnectNodeAdapterOptions extends ConnectRouterOptions {
   /**
@@ -64,16 +72,40 @@ export interface ConnectNodeAdapterOptions extends ConnectRouterOptions {
    * the handlers.
    */
   contextValues?: (req: NodeServerRequest) => ContextValues;
+  /**
+   * Options for the Connect-over-WebSocket protocol. The protocol is served
+   * once the returned handler's `upgrade` function is attached to the
+   * "upgrade" event of an http.Server. It requires HTTP/1.1.
+   */
+  webSocketOptions?: NodeWebSocketOptions;
 }
+
+/**
+ * A Node.js request handler that also serves WebSocket upgrades.
+ */
+export type NodeHandlerFnWithUpgrade = NodeHandlerFn & {
+  /**
+   * Attach to the "upgrade" event of an http.Server to serve the
+   * Connect-over-WebSocket protocol:
+   *
+   * ```ts
+   * const handler = connectNodeAdapter({ routes });
+   * const server = http.createServer(handler);
+   * server.on("upgrade", handler.upgrade);
+   * ```
+   */
+  upgrade: NodeUpgradeHandlerFn;
+};
 
 /**
  * Create a Node.js request handler from a ConnectRouter.
  *
  * The returned function is compatible with http.RequestListener and its equivalent for http2.
+ * Its `upgrade` property serves WebSocket upgrades; see NodeHandlerFnWithUpgrade.
  */
 export function connectNodeAdapter(
   options: ConnectNodeAdapterOptions,
-): NodeHandlerFn {
+): NodeHandlerFnWithUpgrade {
   if (options.acceptCompression === undefined) {
     options.acceptCompression = [compressionGzip, compressionBrotli];
   }
@@ -84,12 +116,18 @@ export function connectNodeAdapter(
   for (const uHandler of router.handlers) {
     paths.set(prefix + uHandler.requestPath, uHandler);
   }
-  return function nodeRequestHandler(
+  function nodeRequestHandler(
     req: NodeServerRequest,
     res: NodeServerResponse,
   ): void {
     // Strip the query parameter when matching paths.
-    const uHandler = paths.get(req.url?.split("?", 2)[0] ?? "");
+    const path = req.url?.split("?", 2)[0] ?? "";
+    if (isUnderWebSocketPrefix(path, prefix, options.webSocketOptions)) {
+      res.writeHead(426, { Upgrade: "websocket", Connection: "Upgrade" });
+      res.end();
+      return;
+    }
+    const uHandler = paths.get(path);
     if (!uHandler) {
       (options.fallback ?? fallback)(req, res);
       return;
@@ -111,7 +149,15 @@ export function connectNodeAdapter(
           reason,
         );
       });
-  };
+  }
+  return Object.assign(nodeRequestHandler, {
+    upgrade: createNodeUpgradeHandler(
+      router.handlers,
+      prefix,
+      options.webSocketOptions ?? {},
+      options.contextValues,
+    ),
+  });
 }
 
 const fallback: NodeHandlerFn = (request, response) => {

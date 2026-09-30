@@ -42,6 +42,7 @@ import { validateReadWriteMaxBytes } from "./limit-io.js";
 import { ConnectError } from "../connect-error.js";
 import { Code } from "../code.js";
 import type { Interceptor } from "../interceptor.js";
+import type { UniversalWebSocketHandler } from "../protocol-websocket/universal-websocket.js";
 
 /**
  * Common options for handlers.
@@ -177,6 +178,13 @@ export interface UniversalHandler extends UniversalHandlerFn {
    * A matcher for Content-Type header values that this procedure supports.
    */
   supportedContentType: ContentTypeMatcher;
+
+  /**
+   * Serves this procedure over the Connect-over-WebSocket protocol, if
+   * enabled. Adapters call it for a request that completed the WebSocket
+   * handshake.
+   */
+  webSocket?: UniversalWebSocketHandler;
 }
 
 /**

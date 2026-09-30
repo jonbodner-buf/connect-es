@@ -67,6 +67,31 @@ How are you feeling today?
 > █
 ```
 
+## Using WebSocket in the browser
+
+The fetch API cannot stream a request body in most browsers, so the example above only uses unary and
+server-streaming RPCs. The Connect-over-WebSocket protocol carries every streaming type, including bidi
+streaming. `src/websocket-webclient.ts` holds the whole conversation with Eliza on a single bidi stream.
+
+A WebSocket handshake is an HTTP/1.1 request, so this server uses plain HTTP/1.1 and needs no
+certificate:
+
+```shell
+npm run start:websocket
+```
+
+Then open http://localhost:8080. The server attaches the adapter's upgrade handler to serve
+WebSocket RPCs, and ordinary Connect RPCs keep working on the same port:
+
+```ts
+const handler = connectNodeAdapter({ routes });
+const server = http.createServer(handler);
+server.on("upgrade", handler.upgrade);
+```
+
+The browser client uses `createWebSocketTransport` from `@connectrpc/connect-web` in place of
+`createConnectTransport`.
+
 ## Using other clients
 
 Because Connect is POST-only protocol that works over HTTP/1.1 and HTTP/2, we can also use

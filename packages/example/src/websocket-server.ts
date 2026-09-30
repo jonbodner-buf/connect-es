@@ -15,20 +15,19 @@
 import { connectNodeAdapter } from "@connectrpc/connect-node";
 import { routes } from "./routes.js";
 import * as esbuild from "esbuild";
-import * as http2 from "node:http2";
+import * as http from "node:http";
 import { readFileSync } from "node:fs";
 import { stdout } from "node:process";
 
-// The adapter turns our RPC routes into as Node.js request handler.
+const port = 8080;
+
 const handler = connectNodeAdapter({
   routes,
-  // If none of the RPC routes match, this handler is called.
-  // We serve our web interface here:
   fallback(req, res) {
     switch (req.url) {
       case "/":
         res.writeHead(200, { "content-type": "text/html" });
-        res.write(readFileSync("www/index.html", "utf8"), "utf8");
+        res.write(readFileSync("www/websocket.html", "utf8"), "utf8");
         res.end();
         break;
       case "/style.css":
@@ -36,10 +35,10 @@ const handler = connectNodeAdapter({
         res.write(readFileSync("www/style.css", "utf8"), "utf8");
         res.end();
         break;
-      case "/webclient.js":
+      case "/websocket-webclient.js":
         void esbuild
           .build({
-            entryPoints: ["src/webclient.ts"],
+            entryPoints: ["src/websocket-webclient.ts"],
             bundle: true,
             write: false,
           })
@@ -60,24 +59,11 @@ const handler = connectNodeAdapter({
   },
 });
 
-http2
-  .createSecureServer(
-    {
-      // We configure the server to use the locally-trusted development certificate
-      // we have created with mkcert:
-      key: readFileSync("localhost+2-key.pem", "utf8"),
-      cert: readFileSync("localhost+2.pem", "utf8"),
-      // Because we are using a certificate, we can use ALPN to offer both HTTP 1.1
-      // and HTTP/2 on the same port.
-      allowHTTP1: true,
-    },
-    handler,
-  )
-  .listen(8443, () => {
-    stdout.write("The server is listening on https://localhost:8443\n");
-    stdout.write("Run `npm run client` for a terminal client.\n");
-  });
-
-// If you don't need gRPC and TLS, you can also use plain-text HTTP 1.1.
-// Start your server with: http.createServer(handler).listen(8080)
-// And use http://localhost:8080 in your clients.
+// A WebSocket handshake is an HTTP/1.1 request, so this server uses plain
+// HTTP/1.1. The adapter's upgrade function serves Connect-over-WebSocket;
+// every other request, including ordinary Connect RPCs, goes to the handler.
+const server = http.createServer(handler);
+server.on("upgrade", handler.upgrade);
+server.listen(port, () => {
+  stdout.write(`The server is listening on http://localhost:${port}\n`);
+});

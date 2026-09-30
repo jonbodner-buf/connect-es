@@ -32,6 +32,9 @@ import type {
   UniversalHandlerOptions,
 } from "./protocol/universal-handler.js";
 import type { ProtocolHandlerFactory } from "./protocol/protocol-handler-factory.js";
+import { createWebSocketHandler } from "./protocol-websocket/handler.js";
+import type { UniversalWebSocketHandler } from "./protocol-websocket/universal-websocket.js";
+import type { MethodImplSpec } from "./implementation.js";
 import type { DescMethod, DescService } from "@bufbuild/protobuf";
 
 /**
@@ -118,6 +121,16 @@ export interface ConnectRouterOptions extends Partial<UniversalHandlerOptions> {
    * not support all streaming types.
    */
   connect?: boolean;
+
+  /**
+   * Enable the Connect-over-WebSocket protocol, which carries every
+   * streaming type over HTTP/1.1, including bidi streaming in web browsers.
+   *
+   * The protocol is enabled by default, but it only takes effect once the
+   * server adapter routes WebSocket upgrades to the router. Set this option
+   * to `false` to disable it.
+   */
+  webSocket?: boolean;
 }
 
 /**
@@ -132,34 +145,37 @@ export function createConnectRouter(
   const router: ConnectRouter = {
     handlers,
     service: (service, implementation, options) => {
-      const { protocols } = whichProtocols(options, base);
-      handlers.push(
-        ...createUniversalServiceHandlers(
-          createServiceImplSpec(service, implementation),
-          protocols,
-        ),
-      );
+      const { protocols, webSocket } = whichProtocols(options, base);
+      const spec = createServiceImplSpec(service, implementation);
+      const uHandlers = createUniversalServiceHandlers(spec, protocols);
+      Object.values(spec.methods).forEach((implSpec, i) => {
+        uHandlers[i].webSocket = webSocket?.(implSpec);
+      });
+      handlers.push(...uHandlers);
       return router;
     },
     rpc: (method, impl, opt) => {
-      const { protocols } = whichProtocols(opt, base);
-
-      handlers.push(
-        createUniversalMethodHandler(
-          createMethodImplSpec(method, impl),
-          protocols,
-        ),
-      );
+      const { protocols, webSocket } = whichProtocols(opt, base);
+      const implSpec = createMethodImplSpec(method, impl);
+      const uHandler = createUniversalMethodHandler(implSpec, protocols);
+      uHandler.webSocket = webSocket?.(implSpec);
+      handlers.push(uHandler);
       return router;
     },
   };
   return router;
 }
 
+interface Protocols {
+  options: ConnectRouterOptions;
+  protocols: ProtocolHandlerFactory[];
+  webSocket: ((spec: MethodImplSpec) => UniversalWebSocketHandler) | undefined;
+}
+
 function whichProtocols(
   options: ConnectRouterOptions | undefined,
-  base?: { options: ConnectRouterOptions; protocols: ProtocolHandlerFactory[] },
-): { options: ConnectRouterOptions; protocols: ProtocolHandlerFactory[] } {
+  base?: Protocols,
+): Protocols {
   if (base && !options) {
     return base;
   }
@@ -189,8 +205,13 @@ function whichProtocols(
       Code.InvalidArgument,
     );
   }
+  const validated = validateUniversalHandlerOptions(opt);
   return {
     options: opt,
     protocols,
+    webSocket:
+      options?.webSocket === false
+        ? undefined
+        : (spec) => createWebSocketHandler(validated, spec),
   };
 }

@@ -31,3 +31,10 @@ export { createNodeHttpClient } from "./node-universal-client.js";
 export type { NodeHttpClientOptions } from "./node-universal-client.js";
 export { Http2SessionManager } from "./http2-session-manager.js";
 export type { Http2SessionOptions } from "./http2-session-manager.js";
+export { createWebSocketTransport } from "./websocket-transport.js";
+export type { WebSocketTransportOptions } from "./websocket-transport.js";
+export type { NodeHandlerFnWithUpgrade } from "./connect-node-adapter.js";
+export type {
+  NodeUpgradeHandlerFn,
+  NodeWebSocketOptions,
+} from "./node-websocket-upgrade.js";
