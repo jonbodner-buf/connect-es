@@ -64,6 +64,15 @@ export interface NodeWebSocketOptions {
    * X-Forwarded-*, and X-Real-IP.
    */
   infrastructureHeaders?: string[];
+
+  /**
+   * How often to send a ping on each connection. A peer that sends nothing,
+   * not even a pong, between two pings is dropped, so a dead peer is noticed
+   * within twice this interval. Zero disables the heartbeat.
+   *
+   * The default is 30 seconds.
+   */
+  pingIntervalMs?: number;
 }
 
 /**
@@ -77,6 +86,7 @@ export type NodeUpgradeHandlerFn = (
 ) => void;
 
 const defaultMaxTimeoutMs = 60 * 60 * 1000;
+const defaultPingIntervalMs = 30 * 1000;
 
 /**
  * Create a handler for the "upgrade" event of http.Server.
@@ -164,6 +174,7 @@ export function createNodeUpgradeHandler(
       socket,
       head,
       webSocket.readMaxBytes + 1,
+      options.pingIntervalMs ?? defaultPingIntervalMs,
     );
     const encrypted = "encrypted" in socket && socket.encrypted === true;
     webSocket({

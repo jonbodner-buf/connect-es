@@ -39,6 +39,7 @@ const highWaterMark = 1024 * 1024;
 // these bounds, so a TCP reset does not destroy the close frame in flight.
 const drainMaxBytes = 1024 * 1024;
 const drainTimeoutMs = 5000;
+const emptyPayload = new Uint8Array(0);
 
 /**
  * Compute Sec-WebSocket-Accept for a Sec-WebSocket-Key.
@@ -69,20 +70,29 @@ export class NodeServerWebSocket implements UniversalServerWebSocket {
   private closeSent = false;
   private discarded = 0;
   private readonly textDecoder = new TextDecoder("utf-8", { fatal: true });
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  private receivedSincePing = true;
 
   /**
    * @param maxMessageBytes The largest reassembled message accepted. A
    * message is abandoned as soon as it passes this, never consumed in full.
+   * @param pingIntervalMs How often to send a ping. A peer that sends
+   * nothing between two pings is dropped. Zero disables the heartbeat.
    */
   constructor(
     private readonly socket: stream.Duplex,
     head: Buffer,
     private readonly maxMessageBytes: number,
+    pingIntervalMs = 0,
   ) {
     socket.on("data", (chunk: Buffer) => this.onData(chunk));
     socket.on("end", () => this.onGone());
     socket.on("close", () => this.onGone());
     socket.on("error", () => this.onGone());
+    if (pingIntervalMs > 0) {
+      this.heartbeatTimer = setInterval(() => this.heartbeat(), pingIntervalMs);
+      this.heartbeatTimer.unref();
+    }
     if (head.byteLength > 0) {
       this.onData(head);
     }
@@ -113,6 +123,7 @@ export class NodeServerWebSocket implements UniversalServerWebSocket {
   }
 
   async close(code: number, reason: string): Promise<void> {
+    this.stopHeartbeat();
     if (!this.closeSent && !this.socket.destroyed) {
       this.closeSent = true;
       const reasonBytes = Buffer.from(reason, "utf8");
@@ -183,7 +194,38 @@ export class NodeServerWebSocket implements UniversalServerWebSocket {
     });
   }
 
+  // Any inbound byte proves the peer is alive, not just a pong: a pong can
+  // sit behind a large message frame that is still arriving.
+  private heartbeat(): void {
+    if (this.closeSent || this.terminal !== undefined) {
+      this.stopHeartbeat();
+      return;
+    }
+    // While reading is paused for backpressure, a pong could not be seen.
+    if (this.socket.isPaused()) {
+      this.receivedSincePing = true;
+      return;
+    }
+    if (!this.receivedSincePing) {
+      this.stopHeartbeat();
+      this.socket.destroy();
+      return;
+    }
+    this.receivedSincePing = false;
+    this.writeFrame(opPing, emptyPayload).catch(() => {
+      // The connection is ending; onGone reports it.
+    });
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== undefined) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+  }
+
   private onData(chunk: Buffer): void {
+    this.receivedSincePing = true;
     if (this.terminal !== undefined) {
       this.discarded += chunk.byteLength;
       if (this.discarded > drainMaxBytes) {
@@ -343,6 +385,7 @@ export class NodeServerWebSocket implements UniversalServerWebSocket {
   }
 
   private onGone(): void {
+    this.stopHeartbeat();
     this.stopInterpreting({ type: "close", reason: "" });
     this.controller.abort();
   }

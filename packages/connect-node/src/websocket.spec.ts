@@ -15,6 +15,7 @@
 import { after, before, describe, it } from "node:test";
 import * as assert from "node:assert";
 import * as http from "node:http";
+import * as net from "node:net";
 import type { AddressInfo } from "node:net";
 import {
   Code,
@@ -511,5 +512,91 @@ describe("WebSocket path prefix", () => {
       }),
       400,
     );
+  });
+});
+
+// Upgrades a bare TCP socket, so a test decides whether pings are answered,
+// and records the opcode of every frame the server sends.
+function rawSocket(
+  baseUrl: string,
+): Promise<{ socket: net.Socket; opcodes: number[]; closed: Promise<void> }> {
+  const url = new URL(baseUrl);
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(Number(url.port), url.hostname);
+    const opcodes: number[] = [];
+    const closed = new Promise<void>((r) => socket.once("close", () => r()));
+    let buffered = Buffer.alloc(0);
+    let upgraded = false;
+    socket.on("error", () => {
+      // The close event follows.
+    });
+    socket.on("data", (chunk: Buffer) => {
+      buffered = Buffer.concat([buffered, chunk]);
+      if (!upgraded) {
+        const end = buffered.indexOf("\r\n\r\n");
+        if (end < 0) {
+          return;
+        }
+        if (!buffered.subarray(0, end).toString().startsWith("HTTP/1.1 101")) {
+          reject(new Error("handshake failed"));
+          return;
+        }
+        upgraded = true;
+        buffered = buffered.subarray(end + 4);
+        resolve({ socket, opcodes, closed });
+      }
+      // The server only sends short, unmasked frames here.
+      while (buffered.byteLength >= 2) {
+        const length = buffered[1] & 0x7f;
+        if (buffered.byteLength < 2 + length) {
+          break;
+        }
+        opcodes.push(buffered[0] & 0x0f);
+        buffered = buffered.subarray(2 + length);
+      }
+    });
+    socket.write(
+      "GET /connectrpc.eliza.v1.ElizaService/Converse HTTP/1.1\r\n" +
+        `Host: ${url.host}\r\n` +
+        "Connection: Upgrade\r\n" +
+        "Upgrade: websocket\r\n" +
+        "Sec-WebSocket-Version: 13\r\n" +
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+        "Sec-WebSocket-Protocol: connectrpc.1+json\r\n\r\n",
+    );
+  });
+}
+
+describe("WebSocket heartbeat", () => {
+  const pingIntervalMs = 50;
+  let baseUrl = "";
+  let server: http.Server;
+  before(async () => {
+    ({ baseUrl, server } = await startServer({ pingIntervalMs }));
+  });
+  after(() => stopServer(server));
+
+  it("drops a peer that does not answer pings", async () => {
+    const { opcodes, closed } = await rawSocket(baseUrl);
+    await closed;
+    assert.ok(opcodes.includes(0x9));
+  });
+
+  it("keeps a peer that answers pings", async () => {
+    const { socket, opcodes, closed } = await rawSocket(baseUrl);
+    const maskedPong = Buffer.from([0x8a, 0x80, 1, 2, 3, 4]);
+    const timer = setInterval(
+      () => socket.write(maskedPong),
+      pingIntervalMs / 2,
+    );
+    let isClosed = false;
+    void closed.then(() => {
+      isClosed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, pingIntervalMs * 6));
+    clearInterval(timer);
+    assert.strictEqual(isClosed, false);
+    assert.ok(opcodes.filter((op) => op == 0x9).length >= 3);
+    socket.destroy();
   });
 });
