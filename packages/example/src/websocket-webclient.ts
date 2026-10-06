@@ -13,40 +13,9 @@
 // limitations under the License.
 
 import { createClient } from "@connectrpc/connect";
+import { createWritableIterable } from "@connectrpc/connect/protocol";
 import { createWebSocketTransport } from "@connectrpc/connect-web";
 import { ElizaService } from "./gen/eliza_pb.js";
-
-/**
- * MessageQueue is an async iterable that a caller feeds one message at a
- * time, for use as the request stream of a bidi RPC.
- */
-class MessageQueue<T> implements AsyncIterable<T> {
-  private readonly buffered: T[] = [];
-  private waiting: ((value: T) => void) | undefined;
-
-  push(value: T): void {
-    const waiting = this.waiting;
-    if (waiting !== undefined) {
-      this.waiting = undefined;
-      waiting(value);
-      return;
-    }
-    this.buffered.push(value);
-  }
-
-  async *[Symbol.asyncIterator](): AsyncIterator<T> {
-    for (;;) {
-      const next = this.buffered.shift();
-      if (next !== undefined) {
-        yield next;
-        continue;
-      }
-      yield await new Promise<T>((resolve) => {
-        this.waiting = resolve;
-      });
-    }
-  }
-}
 
 // A relative base URL resolves against the page, with http rewritten to ws.
 const transport = createWebSocketTransport({ baseUrl: "/" });
@@ -64,14 +33,16 @@ void (async () => {
 
   // The whole conversation is one bidi stream on one WebSocket, which the
   // fetch API cannot do in a browser.
-  const sentences = new MessageQueue<{ sentence: string }>();
+  const sentences = createWritableIterable<{ sentence: string }>();
+  // A write rejects once the conversation has ended. That ends this loop;
+  // the loop below reports why the conversation ended.
   void (async () => {
     for (;;) {
       const sentence = await prompt();
       print(`> ${sentence}`);
-      sentences.push({ sentence });
+      await sentences.write({ sentence });
     }
-  })();
+  })().catch(() => undefined);
   try {
     for await (const res of client.converse(sentences)) {
       print(res.sentence);
